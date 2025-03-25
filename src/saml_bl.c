@@ -3,7 +3,7 @@
  * \brief UART bootloader for SAM L10
  *
  * Copyright (c) 2018 Microchip Technology Inc.
- *               2025 Angus Logan
+ *               2025 Angus Logan (awjlogan@gmail.com)
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -33,9 +33,12 @@
 
 #define BL_LED_PORT 0
 #define BL_LED_PIN  PIN_PA27
+#define BL_LED_EN   1
 
 #define BL_REG_PORT 0
 #define BL_REG_PIN  PIN_PA00
+#define BL_REG_HIGH 1
+#define BL_REG_EN   1
 
 #define UART_TX_PORT 0 // PA
 #define UART_TX_PIN  PIN_PA24C_SERCOM0_PAD2
@@ -56,6 +59,7 @@
 
 #define BOOTLOADER_SIZE   1024
 #define APPLICATION_START (FLASH_ADDR + BOOTLOADER_SIZE)
+#define BOOTPROT          0x2 /* Fuse value to use to protect 1K */
 
 #define PAGE_SIZE            NVMCTRL_PAGE_SIZE
 #define ERASE_BLOCK_SIZE     NVMCTRL_ROW_SIZE
@@ -145,9 +149,15 @@ static void sys_init(void) {
   NVMCTRL->CTRLB.reg = NVMCTRL_CTRLB_CACHEDIS | NVMCTRL_CTRLB_RWS(2);
   NVMCTRL->CTRLC.reg = NVMCTRL_CTRLC_MANW;
 
-  // Boost to 3V3
+// Enable external regulator before going to high speed
+#if BL_REG_EN == 1
   PORT->Group[BL_REG_PORT].DIRSET.reg = (1 << BL_REG_PIN);
+#if BL_REG_HIGH == 1
   PORT->Group[BL_REG_PORT].OUTSET.reg = (1 << BL_REG_PIN);
+#else
+  PORT->GROUP[BL_REG_PORT].OUTCLR.reg = (1 << BL_REG_PIN);
+#endif // BL_REG_HIGH
+#endif // BL_REG_EN
 
   // Switch to the highest performance level
   PM->INTFLAG.reg = PM_INTFLAG_PLRDY;
@@ -159,9 +169,11 @@ static void sys_init(void) {
   OSCCTRL->OSC16MCTRL.reg =
       OSCCTRL_OSC16MCTRL_ENABLE | OSCCTRL_OSC16MCTRL_FSEL_16;
 
-  // Switch on the LED
+// Switch on the LED
+#if BL_LED_EN == 1
   PORT->Group[BL_LED_PORT].DIRSET.reg = (1 << BL_LED_PIN);
   PORT->Group[BL_LED_PORT].OUTSET.reg = (1 << BL_LED_PIN);
+#endif // BL_LED_EN == 1
 }
 
 //-----------------------------------------------------------------------------
@@ -430,7 +442,11 @@ __attribute__((noinline)) // Prevent LTO from inlining main() into the reset
   while (1) {
     timer_expired_flg = timer_expired();
     uart_task();
+
+#if BL_LED_EN == 1
     led_task();
+#endif // BL_LED_EN == 1
+
     timer_expired_flg = false;
 
     if (flash_data_ready)
