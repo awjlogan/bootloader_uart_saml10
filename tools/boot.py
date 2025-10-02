@@ -29,6 +29,8 @@ import serial
 import serial.tools.list_ports
 import optparse
 
+from rich.progress import Progress
+
 # ------------------------------------------------------------------------------
 # Bootloader commands
 BL_CMD_UNLOCK = 0xA0
@@ -48,19 +50,22 @@ BOOTLOADER_SIZE = 1024
 
 # ------------------------------------------------------------------------------
 def error(text):
-    sys.stderr.write("Error: %s\n" % text)
+    sys.stderr.write(f"Error: {text}\n")
     sys.exit(1)
 
 
 # ------------------------------------------------------------------------------
 def warning(text):
-    sys.stderr.write("Warning: %s\n" % text)
+    sys.stderr.write("Warning: {text}\n")
 
 
 # ------------------------------------------------------------------------------
-def verbose(verb, text):
+def verbose(verb, text, nl=True):
     if verb:
-        print(text)
+        if nl:
+            print(text)
+        else:
+            print(text, end="")
 
 
 # ------------------------------------------------------------------------------
@@ -117,7 +122,7 @@ def send_request(port, cmd, data):
         resp = get_response(port)
 
         if resp is None:
-            warning("No response received, retrying %d" % (i + 1))
+            warning(f"No response received, retrying {(i + 1)}")
             time.sleep(0.2)
         else:
             return resp
@@ -158,16 +163,30 @@ def upload(options, port, offset):
 
     addr = offset
 
-    for idx, blk in enumerate(blocks):
-        verbose(options.verbose, "... block %d of %d" % (idx + 1, len(blocks)))
+    if options.verbose:
+        with Progress() as p:
+            t = p.add_task("Uploading...", total=len(blocks))
+            while not p.finished and resp == BL_RESP_OK:
+                for idx, blk in enumerate(blocks):
+                    p.update(t, advance=1)
+                    resp = send_request(port, BL_CMD_DATA, uint32(addr) + blk)
+                    addr += 256
 
-        resp = send_request(port, BL_CMD_DATA, uint32(addr) + blk)
-        addr += 256
+                    if resp != BL_RESP_OK:
+                        break
 
         if resp != BL_RESP_OK:
             error("Invalid response code (0x%02x)" % resp)
 
-    verbose(options.verbose, "Verification")
+    else:
+        for idx, blk in enumerate(blocks):
+            resp = send_request(port, BL_CMD_DATA, uint32(addr) + blk)
+            addr += 256
+
+            if resp != BL_RESP_OK:
+                error("Invalid response code (0x%02x)" % resp)
+
+    verbose(options.verbose, "Verification", nl=False)
     resp = send_request(port, BL_CMD_VERIFY, uint32(crc))
 
     if resp == BL_RESP_CRC_OK:
@@ -243,17 +262,15 @@ def main():
         port = serial.Serial(options.port, 115200, timeout=1)
     except serial.serialutil.SerialException as inst:
         error(inst)
+    else:
+        with port:
+            if options.file is not None:
+                upload(options, port, offset)
+            if options.reboot:
+                verbose(options.verbose, "Rebooting")
+                send_request(port, BL_CMD_RESET, uint32(0) * 4)
 
-    if options.file is not None:
-        upload(options, port, offset)
-
-    if options.reboot:
-        verbose(options.verbose, "Rebooting")
-        send_request(port, BL_CMD_RESET, uint32(0) * 4)
-
-    verbose(options.verbose, "Done!")
-
-    port.close()
+        verbose(options.verbose, "Done!")
 
 
 # ------------------------------------------------------------------------------
